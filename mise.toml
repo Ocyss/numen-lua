@@ -1,0 +1,33 @@
+[env]
+NUMEN_RATES_PATH = "{{config_root}}/rates.json"
+
+[tools]
+lua = "5.5"
+"github:seaofvoices/darklua" = "latest"
+stylua = "latest"
+jq = "latest"
+"github:lde-org/lde" = "latest"
+
+[tasks.cli]
+run = "lde run --cwd packages/numen-cli"
+description = "Run repl"
+
+[tasks.build-cli]
+run = "lde bundle --outfile {{config_root}}/output/cli.lua --cwd packages/numen-cli"
+description = "Build cli"
+
+[tasks.build-core]
+run = "lde bundle --outfile {{config_root}}/output/core.lua --cwd packages/numen-core"
+description = "Build core"
+
+[tasks.build]
+run = "lde bundle --outfile {{config_root}}/output/rime.lua --cwd packages/numen-rime"
+description = "Build all"
+
+[tasks.test]
+run = "lde test"
+description = "Run tests"
+
+[tasks.format]
+run = "stylua ."
+description = "Format code"

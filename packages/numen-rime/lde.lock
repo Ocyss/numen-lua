@@ -1,0 +1,9 @@
+{
+	"dependencies": {
+		"numen-core": {
+			"path": "../numen-core"
+		}
+	},
+	"manifestHash": "66bf32faafa6f6d4",
+	"version": "1"
+}
