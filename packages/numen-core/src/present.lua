@@ -194,6 +194,9 @@ function Presenter:format_value(value, opts)
   if value.type == "num" then
     return { fmt_decimal(value.v) }
   end
+  if value.type == "str" then
+    return { value.s }
+  end
   if value.type == "qty" then
     local out = { fmt_decimal(value.v) .. " " .. value.label }
     if self.config.nearby_units and opts.nearby then
@@ -281,6 +284,10 @@ function Presenter:format_candidates(candidates)
         push(lhs .. " to " .. target_desc(c.process.target) .. " = " .. s)
       end
     end
+  end
+  -- 括号被自动补全时，附加“规范化表达式 = 结果”候选（如 `(1+2)*5 = 15`）
+  if candidates.expr and out[1] then
+    push(candidates.expr .. " = " .. out[1])
   end
   return out
 end

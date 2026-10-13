@@ -4,7 +4,8 @@
 
 ## 功能概览
 
-- **四则运算**：`1 + 2 * 3`、`(2 + 3) * 4`，容忍未闭合括号（适合边输入边出结果的场景）
+- **四则运算**：`1 + 2 * 3`、`(2 + 3) * 4`、`2^10`，容忍未闭合括号（适合边输入边出结果的场景）
+- **数学函数**：`sin(pi / 2)`、`sqrt(2)`、`log(2, 8)`、`avg(1, 2, 3)`、`5!`、`random(1, 100)` 等，另有常量 `pi`、`e`
 - **单位换算**：长度、质量、时间、数据、速度、数据速率、功率，支持 `km/h`、`MB/s` 等复合单位
 - **货币换算**：基于 JSON 汇率文件（EUR 基准，fawazahmed0/currency-api 格式），支持符号（`$` `¥` `€` `£`）、别名（`rmb`、`usd`）和汇率表中的任意币种（如 `thb`）
 - **百分比**：`15% of 490`、`$55 + 25% tip`、`100 + 10%`（同时给出"相对"和"字面"两种歧义候选）
@@ -63,12 +64,43 @@
 
 > 100 km/h * 2 h
   200 km
+
+> sin(pi / 6) * 2
+  1
+
+> log(2, 8)
+  3
+
+> avg(1, 2, 3)
+  2
+
+> 5! + 2^10
+  1144
 ```
 
 说明：
 
 - 单独输入货币金额时，会按汇率自动换算为基准货币（默认人民币，可配置）
 - 日期字面量：`2026-11-15`、`26-11-15`（两位年补 2000）、`-11-15`（当年 11 月 15 日）
+
+## 支持的数学函数
+
+| 函数 | 说明 |
+|---|---|
+| `sin` `cos` `tan` `asin` `acos` `atan` | 三角函数（弧度） |
+| `sinh` `cosh` `tanh` | 双曲函数 |
+| `atan2(y, x)` | 返回点 (x, y) 相对于 x 轴的逆时针角度，能正确处理 x = 0 的边界情况 |
+| `deg(x)` / `rad(x)` | 弧度转角度 / 角度转弧度 |
+| `exp(x)` / `sqrt(x)` | e^x / 平方根 |
+| `log(y, x)` | 以 y 为底 x 的对数（换底公式） |
+| `loge(x)` / `log10(x)` | 以 e / 10 为底的对数 |
+| `avg(...)` / `var(...)` | 平均值 / 方差 |
+| `fact(x)` | 阶乘，也可写成后缀形式 `5!` |
+| `ldexp(x, y)` | 返回 x * 2^y |
+| `frexp(x)` | 返回 `m * 2^e` 形式的文本，使得 x = m * 2^e |
+| `random([m [, n]])` | 随机数：无参返回 0-1 小数；一个参数返回 1-m；两个参数返回 m-n（别名 `rdm`） |
+
+常量：`pi`、`e`。乘方运算符 `^` 为右结合（`2^3^2` = 512），负号优先级低于 `^`（`-2^2` = -4）。
 
 ## 支持的单位
 
@@ -171,15 +203,17 @@ end
 
 ## Rime 输入法集成
 
-`numen-rime` 提供 Lua translator，可在 Rime 中以 `V` 前缀触发计算（如 `V1usd to rmb`）。在方案中配置：
+`numen-rime` 提供 Lua translator，可在 Rime 中以 `cC` 前缀触发计算（如 `cC1usd to rmb`）。在方案中配置：
 
 ```yaml
-recognizer/patterns/numen: "^V.*"
+recognizer/patterns/numen: "^cC.*"
 translators: [lua_translator@numen]
-processors: [lua_processor@numen]   # 可选：V 模式下空格不上屏
+processors: [lua_processor@numen]   # 可选：cC 模式下空格不上屏
+filters: [lua_filter@numen]         # 可选：cC 模式下候选项序号用希腊字母（α β γ…），避免与数值混淆
 
 numen:
   tips: "计算"
+  show_prefix: false   # 是否在编辑区显示触发前缀（默认不显示，候选 preedit 只保留表达式）
   rates_path: "rates.json"
   base_currency: "cny"
   auto_convert_currency: true
@@ -192,4 +226,11 @@ numen:
   nearby_units: true
 ```
 
+前缀从 `recognizer/patterns/numen`（或 `recognizer/patterns/calculator`）的正则中提取字面前缀，如 `"^cC.*"` → `cC`。
+
 按键行为：空格写入输入串、回车上屏当前高亮候选、Tab / Shift+Tab 移动高亮。
+
+## 鸣谢
+
+- 数学函数集的设计参考自 Rime 计算器插件 [super_calculator.lua](https://github.com/ChaosAlphard)，原作者 [@ChaosAlphard](https://github.com/ChaosAlphard)，贡献者 [@DeepChirp](https://github.com/DeepChirp)。
+- 汇率数据格式来自 [fawazahmed0/currency-api](https://github.com/fawazahmed0/exchange-api)。

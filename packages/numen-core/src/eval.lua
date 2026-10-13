@@ -4,6 +4,7 @@
 ---   {type="qty", v, dim, factor, label}
 ---   {type="cur", v, code}
 ---   {type="temporal", dt, kind}        kind: "date"|"time"|"datetime"
+---   {type="str", s=string}             函数返回的文本结果（如 frexp）
 --- A candidate is {value=..., note=string|nil}.
 
 local civil = require("numen-core.civil")
@@ -12,6 +13,8 @@ local parser = require("numen-core.parser")
 local unit = require("numen-core.unit")
 
 local Dim = unit.Dim
+
+local unpack = unpack or table.unpack
 
 local M = {}
 
@@ -35,6 +38,7 @@ local function fmt_value(v)
 end
 
 local eval -- forward declaration
+local eval_funcall -- forward declaration
 
 local function num_to_int(n, negate)
   local v = math.floor(math.abs(n)) * (n < 0 and -1 or 1)
@@ -218,6 +222,8 @@ local function eval_bin(op, lhs, rhs, cfg)
       return nil, "division by zero"
     end
     value = { type = "num", v = l.v / r.v }
+  elseif op == "pow" and l.type == "num" and r.type == "num" then
+    value = { type = "num", v = l.v ^ r.v }
   elseif (op == "add" or op == "sub") and l.type == "qty" and r.type == "qty" then
     if not Dim.eq(l.dim, r.dim) then
       return nil, "cannot add quantities of different dimensions"
@@ -330,6 +336,18 @@ eval = function(expr, cfg)
   local k = expr.kind
   if k == "num" then
     return single({ type = "num", v = expr.v })
+  elseif k == "const" then
+    return single({ type = "num", v = expr.v })
+  elseif k == "neg" then
+    local cands, err = eval(expr.inner, cfg)
+    if not cands then
+      return nil, err
+    end
+    local v = cands[1].value
+    if v.type ~= "num" then
+      return nil, "cannot negate " .. fmt_value(v)
+    end
+    return single({ type = "num", v = -v.v })
   elseif k == "clock" then
     if not civil.valid_time(expr.h, expr.m, 0) then
       return nil, "hour/minute out of range"
@@ -429,11 +447,254 @@ eval = function(expr, cfg)
     return eval_convert(expr.inner, expr.target, cfg)
   elseif k == "bin" then
     return eval_bin(expr.op, expr.lhs, expr.rhs, cfg)
+  elseif k == "funcall" then
+    return eval_funcall(expr, cfg)
   end
   return nil, "unknown expression " .. tostring(k)
 end
 
+--- 数学函数表（参考 super_calculator.lua：https://github.com/ChaosAlphard ，贡献者 DeepChirp）
+--- 每个函数接收数值参数，返回 number 或 string（string 以 str 类型候选展示）。
+local funcs = {}
+
+funcs.sin = math.sin
+funcs.sinh = math.sinh
+funcs.asin = math.asin
+funcs.cos = math.cos
+funcs.cosh = math.cosh
+funcs.acos = math.acos
+funcs.tan = math.tan
+funcs.tanh = math.tanh
+-- atan(x)：点相对于 x 轴的逆时针角度（弧度），x 为横纵坐标比值
+funcs.atan = math.atan
+-- atan2(y, x)：与 math.atan(y/x) 相比能正确处理边界情况（如 x = 0）
+funcs.atan2 = math.atan2
+  or function(y, x)
+    return math.atan(y / x) + (x < 0 and (y >= 0 and math.pi or -math.pi) or 0)
+  end
+-- deg(π) = 180
+funcs.deg = math.deg
+-- rad(180) = π
+funcs.rad = math.rad
+funcs.exp = math.exp
+funcs.sqrt = math.sqrt
+
+-- log(y, x)：以 y 为底 x 的对数（换底公式）
+function funcs.log(y, x)
+  if x <= 0 or y <= 0 then
+    return nil
+  end
+  return math.log(x) / math.log(y)
+end
+
+-- loge(x)：以 e 为底
+function funcs.loge(x)
+  if x <= 0 then
+    return nil
+  end
+  return math.log(x)
+end
+
+-- log10(x)：以 10 为底
+function funcs.log10(x)
+  if x <= 0 then
+    return nil
+  end
+  return math.log10(x)
+end
+
+-- 平均值
+function funcs.avg(...)
+  local n = select("#", ...)
+  if n == 0 then
+    return nil
+  end
+  local sum = 0
+  for i = 1, n do
+    sum = sum + select(i, ...)
+  end
+  return sum / n
+end
+
+-- 方差
+function funcs.var(...)
+  local n = select("#", ...)
+  if n == 0 then
+    return nil
+  end
+  local sum = 0
+  for i = 1, n do
+    sum = sum + select(i, ...)
+  end
+  local mean = sum / n
+  local ssd = 0
+  for i = 1, n do
+    local v = select(i, ...)
+    ssd = ssd + (v - mean) ^ 2
+  end
+  return ssd / n
+end
+
+-- 阶乘（非负整数）
+function funcs.fact(x)
+  if x < 0 or x ~= math.floor(x) then
+    return nil
+  end
+  local result = 1
+  for i = 2, x do
+    result = result * i
+  end
+  return result
+end
+
+-- ldexp(x, y)：返回 x * 2^y
+funcs.ldexp = math.ldexp or function(x, y)
+  return x * 2 ^ y
+end
+
+-- frexp(x)：返回 "m * 2^e" 使得 x = m * 2^e（文本结果，不参与后续运算）
+function funcs.frexp(x)
+  if math.frexp then
+    local m, e = math.frexp(x)
+    return m .. " * 2^" .. e
+  end
+  if x == 0 then
+    return "0 * 2^0"
+  end
+  local e = math.floor(math.log(math.abs(x)) / math.log(2)) + 1
+  local m = x / 2 ^ e
+  return m .. " * 2^" .. e
+end
+
+-- random([m [, n]])：m-n 之间的随机数；n 为空则 1-m；都为空则 0-1 之间的小数
+local function random(...)
+  return math.random(...)
+end
+funcs.rdm = random
+funcs.random = random
+
+--- 函数调用求值：参数先各自求值并取第一个候选，且必须为纯数值。
+function eval_funcall(expr, cfg)
+  local f = funcs[expr.name]
+  if not f then
+    return nil, "unknown function `" .. expr.name .. "`"
+  end
+  local args = {}
+  for _, a in ipairs(expr.args) do
+    local cands, err = eval(a, cfg)
+    if not cands then
+      return nil, err
+    end
+    local v = cands[1].value
+    if v.type ~= "num" then
+      return nil, "function `" .. expr.name .. "` expects numeric arguments, got " .. fmt_value(v)
+    end
+    args[#args + 1] = v.v
+  end
+  local result = f(unpack(args))
+  if result == nil or result ~= result then
+    return nil, "function `" .. expr.name .. "` returned no result (check argument range)"
+  end
+  if type(result) == "string" then
+    return single({ type = "str", s = result })
+  end
+  return single({ type = "num", v = result })
+end
+
 M.eval = eval
+M.funcs = funcs
+
+--- 把 AST 重新格式化为规范表达式文本（`x` 归一为 `*`，括号按优先级补齐）。
+--- 用于“补全后的表达式 = 结果”候选。
+local BIN_OP_TEXT = { add = "+", sub = "-", mul = "*", div = "/", pow = "^" }
+local BIN_OP_PREC = { add = 1, sub = 1, mul = 2, div = 2, pow = 3 }
+
+local format_expr
+
+local function fmt_ast_num(v)
+  return string.format("%.14g", v)
+end
+
+-- 子表达式按优先级决定是否加括号；side: "left"|"right"（右操作数对非结合运算更严格）
+local function fmt_child(e, parent_op, side)
+  local s = format_expr(e)
+  if e.kind == "bin" then
+    local pp = BIN_OP_PREC[parent_op]
+    local cp = BIN_OP_PREC[e.op]
+    local need = cp < pp
+    -- 右操作数：非结合运算（- / ^）同级也要加括号，如 a-(b-c)、a/(b/c)、a^(b^c)
+    if
+      not need
+      and side == "right"
+      and cp == pp
+      and (parent_op == "sub" or parent_op == "div" or parent_op == "pow")
+    then
+      need = true
+    end
+    if need then
+      return "(" .. s .. ")"
+    end
+  end
+  return s
+end
+
+format_expr = function(e)
+  local k = e.kind
+  if k == "num" then
+    return fmt_ast_num(e.v)
+  elseif k == "const" then
+    return e.name
+  elseif k == "clock" then
+    return string.format("%d:%02d", e.h, e.m)
+  elseif k == "datelit" then
+    if e.y == 0 then
+      return "-" .. e.m .. "-" .. e.d
+    end
+    return e.y .. "-" .. e.m .. "-" .. e.d
+  elseif k == "datetime" then
+    return e.tkind
+  elseif k == "qty" then
+    return fmt_ast_num(e.v) .. " " .. e.unit.label
+  elseif k == "compound" then
+    return fmt_ast_num(e.v) .. " " .. e.label
+  elseif k == "cur" then
+    return fmt_ast_num(e.v) .. " " .. string.lower(e.code)
+  elseif k == "percent" then
+    return fmt_ast_num(e.n) .. "%"
+  elseif k == "percentof" then
+    return fmt_ast_num(e.n) .. "% of " .. format_expr(e.inner)
+  elseif k == "tipadd" then
+    return format_expr(e.base) .. " + " .. fmt_ast_num(e.n) .. "% tip"
+  elseif k == "convert" then
+    local target = e.target
+    local t
+    if target.kind == "unit" then
+      t = target.unit.label
+    elseif target.kind == "cur" then
+      t = string.lower(target.code)
+    else
+      t = target.tkind
+    end
+    return format_expr(e.inner) .. " to " .. t
+  elseif k == "bin" then
+    return fmt_child(e.lhs, e.op, "left") .. BIN_OP_TEXT[e.op] .. fmt_child(e.rhs, e.op, "right")
+  elseif k == "funcall" then
+    local parts = {}
+    for i, a in ipairs(e.args) do
+      parts[i] = format_expr(a)
+    end
+    return e.name .. "(" .. table.concat(parts, ", ") .. ")"
+  elseif k == "neg" then
+    local s = format_expr(e.inner)
+    if e.inner.kind == "bin" then
+      s = "(" .. s .. ")"
+    end
+    return "-" .. s
+  end
+  return "?"
+end
+
+M.format_expr = format_expr
 
 --- Engine: build once with a config, reuse for every input.
 ---
@@ -492,6 +753,9 @@ function Engine:evaluate(input)
   if not tokens then
     return nil, err
   end
+  -- 括号被自动补全时（如 `1+2)*5`），记录规范化后的表达式供展示
+  local balanced = parser.balance_parens(tokens)
+  local parens_fixed = #balanced ~= #tokens
   local expr
   expr, err = parser.parse(tokens)
   if not expr then
@@ -501,6 +765,9 @@ function Engine:evaluate(input)
   cands, err = eval(expr, self.config)
   if not cands then
     return nil, err
+  end
+  if parens_fixed then
+    cands.expr = M.format_expr(expr)
   end
   if self.config.auto_convert_currency and expr.kind == "cur" then
     for _, c in ipairs(cands) do

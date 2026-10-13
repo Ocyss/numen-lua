@@ -18,6 +18,14 @@ test.it("basic formats", function()
   test.deepEqual(formatted("100 km/h * 2 h"), { "200 km", "200000 m" })
 end)
 
+test.it("paren completion shows normalized expression", function()
+  test.deepEqual(formatted("1+2)*5"), { "15", "(1+2)*5 = 15" })
+  test.deepEqual(formatted("1+2)x 5"), { "15", "(1+2)*5 = 15" })
+  test.deepEqual(formatted("sin(pi/2"), { "1", "sin(pi/2) = 1" })
+  -- 括号平衡时不追加
+  test.deepEqual(formatted("(1+2)*5"), { "15" })
+end)
+
 test.it("seconds shown only when nonzero", function()
   test.deepEqual(formatted("12:03 + 3m"), { "12:06" })
   -- 秒非 00：H:M 与 H:M:S 两个变体都输出

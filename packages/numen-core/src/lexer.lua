@@ -4,7 +4,8 @@
 ---   {kind="symbol", c=string}        currency symbols: $ ¥ € £
 ---   {kind="clock", h=, m=}           HH:MM
 ---   {kind="datelit", y=, m=, d=}     26-11-15 / 2026-11-15 / -11-15 / 11/15
----   {kind="plus"|"minus"|"star"|"slash"|"percent"|"lparen"|"rparen"}
+---   {kind="plus"|"minus"|"star"|"slash"|"percent"|"lparen"|"rparen"
+---         |"comma"|"caret"|"bang"}
 
 local M = {}
 
@@ -87,6 +88,15 @@ function M.lex(input)
       i = i + 1
     elseif c == ")" then
       out[#out + 1] = { kind = "rparen" }
+      i = i + 1
+    elseif c == "," then
+      out[#out + 1] = { kind = "comma" }
+      i = i + 1
+    elseif c == "^" then
+      out[#out + 1] = { kind = "caret" }
+      i = i + 1
+    elseif c == "!" then
+      out[#out + 1] = { kind = "bang" }
       i = i + 1
     elseif SYMBOLS[c] then
       out[#out + 1] = { kind = "symbol", c = c }

@@ -1,0 +1,103 @@
+local common = require("tests.common")
+local test = require("lde-test")
+
+local has_num = common.has_num
+local is_err = common.is_err
+
+test.it("constants", function()
+  has_num("pi", math.pi)
+  has_num("e", math.exp(1))
+  has_num("2 * pi", 2 * math.pi)
+end)
+
+test.it("power operator", function()
+  has_num("2^10", 1024)
+  has_num("2^3^2", 512) -- 右结合
+  has_num("2 * 3^2", 18)
+  has_num("-2^2", -4)
+end)
+
+test.it("factorial", function()
+  has_num("5!", 120)
+  has_num("0!", 1)
+  has_num("(1 + 2)!", 6)
+  is_err("(-1)!")
+end)
+
+test.it("trig functions", function()
+  has_num("sin(0)", 0)
+  has_num("cos(0)", 1)
+  has_num("sin(pi / 2)", 1)
+  has_num("tan(0)", 0)
+  has_num("asin(1)", math.pi / 2)
+  has_num("acos(1)", 0)
+  has_num("atan(1)", math.pi / 4)
+  has_num("atan2(1, 1)", math.pi / 4)
+  has_num("sinh(0)", 0)
+  has_num("cosh(0)", 1)
+  has_num("tanh(0)", 0)
+end)
+
+test.it("angle conversion", function()
+  has_num("deg(pi)", 180)
+  has_num("rad(180)", math.pi)
+end)
+
+test.it("exp and sqrt", function()
+  has_num("exp(0)", 1)
+  has_num("exp(1)", math.exp(1))
+  has_num("sqrt(16)", 4)
+  has_num("sqrt(2) ^ 2", 2)
+end)
+
+test.it("logarithms", function()
+  has_num("log(2, 8)", 3)
+  has_num("loge(e)", 1)
+  has_num("log10(1000)", 3)
+  is_err("log(2, -1)")
+  is_err("loge(0)")
+  is_err("log10(0)")
+end)
+
+test.it("avg and variance", function()
+  has_num("avg(1, 2, 3)", 2)
+  has_num("var(1, 2, 3)", 2 / 3)
+  is_err("avg()")
+  is_err("var()")
+end)
+
+test.it("ldexp and frexp", function()
+  has_num("ldexp(0.5, 4)", 8)
+  local values = common.values("frexp(8)")
+  test.truthy(values[1].type == "str" and values[1].s == "0.5 * 2^4", "frexp(8): " .. tostring(values[1].s))
+end)
+
+test.it("random", function()
+  local values = common.values("random(1, 10)")
+  local v = values[1].v
+  test.truthy(v >= 1 and v <= 10 and v == math.floor(v), "random(1, 10) in range")
+  local values0 = common.values("rdm()")
+  local v0 = values0[1].v
+  test.truthy(v0 >= 0 and v0 < 1, "rdm() in [0, 1)")
+end)
+
+test.it("functions compose with arithmetic", function()
+  has_num("sqrt(9) + 1", 4)
+  has_num("sin(pi / 6) * 2", 1)
+  has_num("fact(3) + 2!", 8)
+end)
+
+test.it("normalized expression is exposed", function()
+  local engine = common.engine()
+  local cands = engine:evaluate("1+2)*5")
+  test.truthy(cands)
+  test.truthy(cands.expr == "(1+2)*5", "cands.expr: " .. tostring(cands.expr))
+  local cands2 = engine:evaluate("sin(pi/2")
+  test.truthy(cands2)
+  test.truthy(cands2.expr == "sin(pi/2)", "cands.expr: " .. tostring(cands2.expr))
+end)
+
+test.it("functions reject non-numeric arguments", function()
+  is_err("sin(1 km)")
+  is_err("sqrt($5)")
+end)

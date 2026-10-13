@@ -10,7 +10,8 @@
 ---   {kind="percentof", n, inner}
 ---   {kind="tipadd", base, n}
 ---   {kind="convert", inner, target}    target: {kind="unit"|"cur"|"temporal", ...}
----   {kind="bin", op, lhs, rhs}         op: "add"|"sub"|"mul"|"div"
+---   {kind="bin", op, lhs, rhs}         op: "add"|"sub"|"mul"|"div"|"pow"
+---   {kind="funcall", name, args}       args: 表达式列表（0 个或多个）
 
 local unit = require("numen-core.unit")
 
@@ -21,7 +22,8 @@ local lookup_currency = unit.lookup_currency
 local Dim = unit.Dim
 
 --- Tolerate unbalanced parentheses (the user is still typing):
---- drop unmatched `)`, append missing `)` at the end.
+--- a stray `)` closes the whole preceding expression (`1 + 2)x2` -> `(1 + 2)x2`),
+--- missing `)` are appended at the end.
 local function balance_parens(tokens)
   local depth = 0
   local out = {}
@@ -30,7 +32,11 @@ local function balance_parens(tokens)
       depth = depth + 1
       out[#out + 1] = t
     elseif t.kind == "rparen" and depth == 0 then
-      -- stray `)`: drop it
+      -- stray `)`: wrap everything so far in parens
+      if #out > 0 then
+        table.insert(out, 1, { kind = "lparen" })
+        out[#out + 1] = t
+      end
     elseif t.kind == "rparen" then
       depth = depth - 1
       out[#out + 1] = t
@@ -50,6 +56,40 @@ local function fmt_tok(t)
   end
   return t.kind
 end
+
+--- 数学函数名（跟随 `(` 时按函数调用解析），实现见 eval.lua
+M.FUNCTION_NAMES = {
+  sin = true,
+  sinh = true,
+  asin = true,
+  cos = true,
+  cosh = true,
+  acos = true,
+  tan = true,
+  tanh = true,
+  atan = true,
+  atan2 = true,
+  deg = true,
+  rad = true,
+  exp = true,
+  sqrt = true,
+  log = true,
+  loge = true,
+  log10 = true,
+  avg = true,
+  var = true,
+  fact = true,
+  ldexp = true,
+  frexp = true,
+  random = true,
+  rdm = true,
+}
+
+--- 数学常量
+local CONSTANTS = {
+  pi = math.pi,
+  e = math.exp(1),
+}
 
 local Parser = {}
 Parser.__index = Parser
@@ -186,9 +226,9 @@ function Parser:parse_add()
   return e
 end
 
---- mul := convert (("of" | "*" | "x" | "/") convert)*
+--- mul := pow (("of" | "*" | "x" | "/") pow)*
 function Parser:parse_mul()
-  local e, err = self:parse_convert()
+  local e, err = self:parse_pow()
   if not e then
     return nil, err
   end
@@ -200,7 +240,7 @@ function Parser:parse_mul()
         return nil, "`of` requires a percentage on the left"
       end
       local rhs
-      rhs, err = self:parse_convert()
+      rhs, err = self:parse_pow()
       if not rhs then
         return nil, err
       end
@@ -208,7 +248,7 @@ function Parser:parse_mul()
     elseif t and t.kind == "star" then
       self.pos = self.pos + 1
       local rhs
-      rhs, err = self:parse_convert()
+      rhs, err = self:parse_pow()
       if not rhs then
         return nil, err
       end
@@ -217,7 +257,7 @@ function Parser:parse_mul()
       -- `x` as a multiplication sign: `5d x 120km/h`
       self.pos = self.pos + 1
       local rhs
-      rhs, err = self:parse_convert()
+      rhs, err = self:parse_pow()
       if not rhs then
         return nil, err
       end
@@ -225,7 +265,7 @@ function Parser:parse_mul()
     elseif t and t.kind == "slash" then
       self.pos = self.pos + 1
       local rhs
-      rhs, err = self:parse_convert()
+      rhs, err = self:parse_pow()
       if not rhs then
         return nil, err
       end
@@ -237,7 +277,26 @@ function Parser:parse_mul()
   return e
 end
 
---- postfix := primary (unit | currency | "/" unit)*
+--- pow := convert ("^" pow)?   右结合：`2^3^2` = `2^(3^2)` = 512
+function Parser:parse_pow()
+  local e, err = self:parse_convert()
+  if not e then
+    return nil, err
+  end
+  local t = self:peek()
+  if t and t.kind == "caret" then
+    self.pos = self.pos + 1
+    local rhs
+    rhs, err = self:parse_pow()
+    if not rhs then
+      return nil, err
+    end
+    e = { kind = "bin", op = "pow", lhs = e, rhs = rhs }
+  end
+  return e
+end
+
+--- postfix := primary (unit | currency | "/" unit | "!")*
 function Parser:parse_postfix()
   local e, err = self:parse_primary()
   if not e then
@@ -284,6 +343,10 @@ function Parser:parse_postfix()
       else
         break
       end
+    elseif t and t.kind == "bang" then
+      -- 阶乘后缀：`5!`、`(1+2)!`
+      self.pos = self.pos + 1
+      e = { kind = "funcall", name = "fact", args = { e } }
     elseif t and t.kind == "slash" then
       -- compound unit: quantity / unit, e.g. `100 km/h`
       local nx = self:peek_at(1)
@@ -354,14 +417,15 @@ function Parser:parse_primary()
   end
   if t.kind == "minus" then
     self.pos = self.pos + 1
-    local e, err = self:parse_primary()
+    -- 负号优先级低于 `^`：`-2^2` = `-(2^2)` = -4
+    local e, err = self:parse_pow()
     if not e then
       return nil, err
     end
     if e.kind == "num" then
       return { kind = "num", v = -e.v }
     end
-    return nil, "cannot negate " .. e.kind
+    return { kind = "neg", inner = e }
   end
   if t.kind == "symbol" then
     self.pos = self.pos + 1
@@ -377,6 +441,51 @@ function Parser:parse_primary()
   end
   if t.kind == "ident" then
     local name = t.s
+    -- `log10(...)`、`atan2(...)`：词法上数字不入标识符，会切成名字+数字，在此拼回
+    local ntok = self:peek_at(1)
+    local lp = self:peek_at(2)
+    if ntok and ntok.kind == "num" and lp and lp.kind == "lparen" then
+      local joined = name .. tostring(ntok.v)
+      if M.FUNCTION_NAMES[joined] then
+        name = joined
+        self.pos = self.pos + 1
+      end
+    end
+    -- 函数调用：`sin(pi / 2)`、`avg(1, 2, 3)`、`random()`
+    local nx0 = self:peek_at(1)
+    if M.FUNCTION_NAMES[name] and nx0 and nx0.kind == "lparen" then
+      self.pos = self.pos + 2
+      local args = {}
+      local c = self:peek()
+      if not (c and c.kind == "rparen") then
+        while true do
+          local arg, aerr = self:parse_add()
+          if not arg then
+            return nil, aerr
+          end
+          args[#args + 1] = arg
+          local sep = self:peek()
+          if sep and sep.kind == "comma" then
+            self.pos = self.pos + 1
+          else
+            break
+          end
+        end
+      end
+      local close = self:peek()
+      if close and close.kind == "rparen" then
+        self.pos = self.pos + 1
+      else
+        return nil, "expected `)`, got " .. fmt_tok(close)
+      end
+      return { kind = "funcall", name = name, args = args }
+    end
+    -- 数学常量
+    local const = CONSTANTS[name]
+    if const then
+      self.pos = self.pos + 1
+      return { kind = "const", name = name, v = const }
+    end
     if name == "date" or name == "today" then
       self.pos = self.pos + 1
       return { kind = "datetime", tkind = "date" }
@@ -412,6 +521,8 @@ function Parser:parse_primary()
   end
   return nil, "unexpected token " .. fmt_tok(t)
 end
+
+M.balance_parens = balance_parens
 
 function M.parse(tokens)
   if #tokens == 0 then

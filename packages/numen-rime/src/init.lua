@@ -2,11 +2,13 @@
 --
 -- 参考 super_calculator.lua 的 Rime 适配方式，将求值逻辑交给 numen 引擎。
 -- 在 rime 方案中配置:
---   recognizer/patterns/numen: "^V.*"   # 触发前缀
---   translators: [lua_translator@numen]
---   processors: [lua_processor@numen]    # 可选：V 模式下空格不上屏
+--   recognizer/patterns/numen: "^cC.*"  # 触发前缀
+--   translators: [lua_translator@numen*T]
+--   processors: [lua_processor@numen*P]    # 可选：cC 模式下空格不上屏
+--   filters: [lua_filter@numen*F]          # 可选：cC 模式下候选项序号用希腊字母（α β γ…）
 --   numen:
 --     tips: "计算"                     # 提示文字
+--     show_prefix: true                 # 在编辑区显示触发前缀（默认不显示）
 --     rates_path: "rates.json"         # 汇率文件路径（默认取脚本旁的 rates.json）
 --     base_currency: "cny"             # 基准货币
 --     auto_convert_currency: true      # 自动换算为基准货币
@@ -103,8 +105,12 @@ function T.init_real(env)
   env.name_space = env.name_space:gsub("^*", "")
   local pattern = cfg_get(config, "get_string", "recognizer/patterns/numen")
     or cfg_get(config, "get_string", "recognizer/patterns/calculator")
-  T.prefix = (pattern and pattern:match("%^.?([a-zA-Z/=]+).*")) or "V"
+  -- pattern 是正则（如 "^cC.*"、"^V.*"），提取出字面前缀用于剥离输入
+  local prefix = (pattern or "^cC"):gsub("^%^", ""):gsub("%..-$", "")
+  T.prefix = prefix
   T.tips = cfg_get(config, "get_string", "numen/tips") or "计算"
+  -- 默认不在编辑区显示触发前缀：候选的 preedit 只保留表达式本体
+  T.show_prefix = cfg_get(config, "get_bool", "numen/show_prefix") == true
   T.init_error = nil
   T.core = nil
 
@@ -174,25 +180,40 @@ function T.func(input, seg, env)
   segment.prompt = "〔" .. (T.tips or "计算") .. "〕"
   segment.tags = segment.tags + Set({ "numen" })
 
-  -- 初始化失败时给出可见的错误提示（直接放在候选正文，避免被忽略）
-  if not T.core then
-    yield(Candidate("numen", seg.start, seg._end, "numen 错误", T.init_error or "引擎未初始化"))
-    yield(Candidate("numen", seg.start, seg._end, T.init_error or "引擎未初始化", ""))
-    return
-  end
-
   local expr = input
   if startsWith(input, T.prefix) then
     expr = input:sub(#T.prefix + 1)
   end
   expr = expr:match("^%s*(.-)%s*$")
-  if expr == "" then
+
+  -- 参考 super_calculator.lua 的 show_prefix 行为：
+  -- 默认不显示前缀时，所有候选（含错误候选）的 preedit 都改写为去掉前缀的表达式，
+  -- 避免输入非法符号时编辑区闪回带前缀的原始输入
+  local function yield_cand(text, comment)
+    local cand = Candidate("numen", seg.start, seg._end, text, comment)
+    if not T.show_prefix then
+      cand.preedit = expr
+    end
+    yield(cand)
+  end
+
+  -- 报错封装：含 <eof> 的说明表达式还没输入完整，统一归为“表达式不完整”；
+  -- 其余归为“解析失败”。原始详细错误放在第二个候选里。
+  local function yield_error(msg)
+    local label = msg:find("<eof>", 1, true) and "表达式不完整" or "解析失败"
+    yield_cand(expr, label)
+    yield_cand(expr, msg)
+  end
+
+  -- 初始化失败时给出可见的错误提示
+  if not T.core then
+    yield_cand(expr, "初始化失败")
+    yield_cand(expr, T.init_error or "引擎未初始化")
     return
   end
 
-  -- 出错时直接在候选正文给出原因，并附上前缀提示
-  local function yield_error(msg)
-    yield(Candidate("numen", seg.start, seg._end, "numen: " .. msg, expr))
+  if expr == "" then
+    return
   end
 
   local ok_eval, cands, err = pcall(T.core.evaluate, T.core, expr)
@@ -210,11 +231,11 @@ function T.func(input, seg, env)
     return
   end
   for _, s in ipairs(lines) do
-    yield(Candidate("numen", seg.start, seg._end, s, T.rates_warning or ""))
+    yield_cand(s, T.rates_warning or "")
   end
   -- 汇率缺失时额外给出可见提示候选
   if T.rates_warning then
-    yield(Candidate("numen", seg.start, seg._end, "numen: " .. T.rates_warning, expr))
+    yield_cand(expr, T.rates_warning)
   end
 end
 

@@ -30,9 +30,13 @@ test.it("unclosed paren is auto completed", function()
   has_num("((1 + 2) * 3", 9)
 end)
 
-test.it("stray close paren is dropped", function()
-  has_num("1 + 2) * 3", 7)
-  has_num("1 + 2)x3", 7)
+test.it("stray close paren wraps the preceding expression", function()
+  -- `1 + 2) * 3` behaves like `(1 + 2) * 3`
+  has_num("1 + 2) * 3", 9)
+  has_num("1 + 2 * 5)x2", 22)
+  has_num("1 + 2 * 5)x2+1", 23)
+  has_num("(1 + 2 * 5)x2+1)*2", 46)
+  has_num("1 + 2 * 5)x2+1)*2", 46)
   has_qty("5d to h) x 120km/h", "km", 14400)
 end)
 
